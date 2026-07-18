@@ -1,0 +1,42 @@
+{
+  "name": "yuque-cookie-mcp",
+  "version": "1.1.0",
+  "description": "语雀 MCP 服务器 - Cookie 认证，无需超级会员。支持个人/公司空间、知识库创建、小记管理、链接读取",
+  "main": "index.js",
+  "bin": {
+    "yuque-cookie-mcp": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "yuque-client.js",
+    "login.js",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dove-yang/yuque-cookie-mcp"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "login": "node login.js"
+  },
+  "keywords": [
+    "yuque",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "documentation",
+    "notes",
+    "cookie"
+  ],
+  "author": "dove-yang (patched from xiaocong/yuque-cookie-mcp)",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.6.0",
+    "playwright": "^1.40.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
