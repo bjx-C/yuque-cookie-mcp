@@ -39,39 +39,21 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const CONFIG_DIR = path.join(process.env.HOME || '', '.yuque-mcp');
 const COOKIE_FILE = path.join(CONFIG_DIR, 'cookies.json');
-// 组织域名列表（登录后会自动访问这些域名以获取 Cookie）
-const ORG_DOMAINS = [
-    'https://bd-tech.yuque.com'
-];
 async function login() {
     console.log('🚀 启动浏览器，请在打开的窗口中登录语雀...\n');
     if (!fs.existsSync(CONFIG_DIR)) {
-        fs.mkdirSync(CONFIG_DIR, { recursive: true });
+        fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
     }
+    fs.chmodSync(CONFIG_DIR, 0o700);
     const browser = await playwright_1.chromium.launch({
         headless: false,
         channel: 'chrome',
         args: [
-            '--disable-blink-features=AutomationControlled',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--no-sandbox',
             '--disable-infobars',
             '--disable-dev-shm-usage',
-            '--disable-web-security',
-            '--disable-features=BlockInsecurePrivateNetworkRequests',
         ],
     });
     const context = await browser.newContext();
-    // Hide automation markers from detection
-    await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-        // @ts-ignore
-        delete window.__playwright__binding__;
-        // @ts-ignore
-        window.chrome = { runtime: {} };
-    });
     const page = await context.newPage();
     await page.goto('https://www.yuque.com/login', { waitUntil: 'domcontentloaded' });
     console.log('📝 请在浏览器中完成登录...');
@@ -83,20 +65,8 @@ async function login() {
         }, { timeout: 300000 });
         await page.waitForLoadState('networkidle');
         console.log('✅ 个人空间登录成功\n');
-        // 访问组织域名以获取组织 Cookie
-        for (const orgDomain of ORG_DOMAINS) {
-            console.log(`🔄 正在获取组织 Cookie: ${orgDomain}`);
-            try {
-                await page.goto(orgDomain, { waitUntil: 'networkidle', timeout: 30000 });
-                await page.waitForTimeout(2000);
-                console.log(`   ✓ ${orgDomain} Cookie 已获取\n`);
-            }
-            catch (e) {
-                console.log(`   ⚠ ${orgDomain} 访问失败，跳过\n`);
-            }
-        }
-        const cookies = await context.cookies();
-        const yuqueCookies = cookies.filter(c => c.domain.includes('yuque.com'));
+        const cookies = await context.cookies('https://www.yuque.com');
+        const yuqueCookies = cookies.filter(c => c.domain === 'www.yuque.com' || c.domain === '.yuque.com');
         if (yuqueCookies.length === 0) {
             console.error('❌ 未获取到 Cookie，请确保已登录');
             await browser.close();
@@ -107,7 +77,8 @@ async function login() {
             createdAt: new Date().toISOString(),
             expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
         };
-        fs.writeFileSync(COOKIE_FILE, JSON.stringify(cookieData, null, 2));
+        fs.writeFileSync(COOKIE_FILE, JSON.stringify(cookieData, null, 2), { mode: 0o600 });
+        fs.chmodSync(COOKIE_FILE, 0o600);
         // 统计各域名的 Cookie 数量
         const domainStats = {};
         yuqueCookies.forEach(c => {
