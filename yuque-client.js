@@ -37,8 +37,9 @@ exports.YuqueClient = void 0;
 const axios_1 = __importStar(require("axios"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const lake_utils_1 = require("./lake-utils.js");
 const YUQUE_BASE_URL = 'https://www.yuque.com';
-const ORG_BASE_URL = 'https://bd-tech.yuque.com';
+const ORG_BASE_URL = process.env.YUQUE_ORG_BASE_URL || '';
 const CONFIG_DIR = path.join(process.env.HOME || '', '.yuque-mcp');
 const COOKIE_FILE = path.join(CONFIG_DIR, 'cookies.json');
 class YuqueClient {
@@ -85,6 +86,7 @@ class YuqueClient {
                 return { cookie: null, ctoken: '' };
             }
             const data = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf-8'));
+            fs.chmodSync(COOKIE_FILE, 0o600);
             if (new Date(data.expiresAt) < new Date()) {
                 console.error('Cookie 已过期，请重新登录');
                 return { cookie: null, ctoken: '' };
@@ -759,66 +761,132 @@ class YuqueClient {
     }
     // ========== URL 解析获取文档 ==========
     extractTextFromLake(lakeContent) {
-        if (!lakeContent)
-            return '';
-        // 移除 lake 格式的 meta 标签
-        let text = lakeContent.replace(/<!doctype lake>/, '');
-        text = text.replace(/<meta[^>]*>/g, '');
-        // 提取图片 card 标签并转换为 Markdown 图片格式
-        text = text.replace(/<card[^>]*name="image"[^>]*value="data:([^"]*)"[^>]*>/g, (match, encodedData) => {
-            try {
-                const jsonData = JSON.parse(decodeURIComponent(encodedData));
-                const src = jsonData.src || '';
-                const name = jsonData.name || '图片';
-                return `\n![${name}](${src})\n`;
-            }
-            catch {
-                return '';
-            }
+        return (0, lake_utils_1.lakeToMarkdown)(lakeContent);
+    }
+    async convertMarkdownToLake(markdown) {
+        if (this.authType !== 'cookie') {
+            throw new Error('公式安全转换目前仅支持 Cookie 认证');
+        }
+        const response = await this.client.post('/api/docs/convert', {
+            from: 'markdown',
+            to: 'lake',
+            content: markdown
         });
-        // 提取附件 card 标签
-        text = text.replace(/<card[^>]*name="localdoc"[^>]*value="data:([^"]*)"[^>]*>/g, (match, encodedData) => {
-            try {
-                const jsonData = JSON.parse(decodeURIComponent(encodedData));
-                const src = jsonData.src || '';
-                const name = jsonData.name || '附件';
-                return `\n📎 [${name}](${src})\n`;
-            }
-            catch {
-                return '';
-            }
-        });
-        // 将常见标签转换为 Markdown 格式
-        text = text.replace(/<h1[^>]*>(.*?)<\/h1>/g, '# $1\n');
-        text = text.replace(/<h2[^>]*>(.*?)<\/h2>/g, '## $1\n');
-        text = text.replace(/<h3[^>]*>(.*?)<\/h3>/g, '### $1\n');
-        text = text.replace(/<h4[^>]*>(.*?)<\/h4>/g, '#### $1\n');
-        text = text.replace(/<p[^>]*>(.*?)<\/p>/g, '$1\n');
-        text = text.replace(/<br\s*\/?>/g, '\n');
-        text = text.replace(/<li[^>]*>(.*?)<\/li>/g, '- $1\n');
-        text = text.replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g, '[$2]($1)');
-        text = text.replace(/<strong[^>]*>(.*?)<\/strong>/g, '**$1**');
-        text = text.replace(/<em[^>]*>(.*?)<\/em>/g, '*$1*');
-        text = text.replace(/<code[^>]*>(.*?)<\/code>/g, '`$1`');
-        // 处理表格 - 简单提取文本
-        text = text.replace(/<tr[^>]*>/g, '\n');
-        text = text.replace(/<td[^>]*>(.*?)<\/td>/g, '| $1 ');
-        text = text.replace(/<th[^>]*>(.*?)<\/th>/g, '| $1 ');
-        // 移除剩余的 HTML 标签（包括未处理的 card 标签）
-        text = text.replace(/<card[^>]*>.*?<\/card>/g, '');
-        text = text.replace(/<[^>]+>/g, '');
-        // 清理多余的空白
-        text = text.replace(/\n{3,}/g, '\n\n');
-        text = text.replace(/&amp;/g, '&');
-        text = text.replace(/&lt;/g, '<');
-        text = text.replace(/&gt;/g, '>');
-        text = text.replace(/&nbsp;/g, ' ');
-        return text.trim();
+        const lakeContent = response.data?.data?.content || response.data?.content || '';
+        if (!lakeContent.startsWith('<!doctype lake>')) {
+            throw new Error('语雀 Markdown→Lake 转换未返回有效 Lake 文档');
+        }
+        const expectedFormulaBlocks = (0, lake_utils_1.countMarkdownFormulaBlocks)(markdown);
+        const stats = (0, lake_utils_1.getCardStats)(lakeContent);
+        if (stats.native_math < expectedFormulaBlocks) {
+            throw new Error(`公式转换不完整：输入 ${expectedFormulaBlocks} 个公式块，仅生成 ${stats.native_math} 个 math 节点`);
+        }
+        return lakeContent;
+    }
+    async updateDocLake(docId, lakeContent, draftVersion = 0) {
+        if (this.authType !== 'cookie') {
+            throw new Error('Lake 原文更新目前仅支持 Cookie 认证');
+        }
+        if (!lakeContent.startsWith('<!doctype lake>')) {
+            throw new Error('拒绝写入：内容不是有效的 Lake 文档');
+        }
+        // Match the payload used by Yuque's current Lake editor. Lake XML is
+        // submitted through body_asl; sending it through body/body_draft_asl
+        // causes Yuque to accept the request but save an empty document.
+        const data = {
+            id: docId,
+            format: 'lake',
+            body_asl: lakeContent,
+            draft_version: draftVersion || 0,
+            sync_dynamic_data: false,
+            save_type: 'user',
+            edit_type: 'lake'
+        };
+        if (!draftVersion) {
+            data._without_draft_version = 1;
+        }
+        const response = await this.client.put(`/api/docs/${docId}`, data);
+        return response.data.data;
+    }
+    async patchDocSectionByUrl(url, heading, bodyMarkdown, headingLevel, dryRun = false) {
+        const initial = await this.getDocByUrl(url);
+        const initialLake = initial.doc.body_html;
+        if (!initialLake.startsWith('<!doctype lake>')) {
+            throw new Error('目标文档不是 Lake 格式，已拒绝局部更新');
+        }
+        const converted = await this.convertMarkdownToLake(bodyMarkdown);
+        const patch = (0, lake_utils_1.patchLakeSection)(initialLake, heading, converted, headingLevel);
+        const convertedStats = (0, lake_utils_1.getCardStats)(patch.fragment);
+        const beforeStats = (0, lake_utils_1.getCardStats)(initialLake);
+        if (dryRun) {
+            return {
+                success: true,
+                dry_run: true,
+                doc_id: initial.doc.id,
+                book_id: initial.book.id,
+                heading: patch.location.heading.text,
+                heading_level: patch.location.heading.level,
+                replacement_bytes: patch.fragment.length,
+                formulas_to_write: convertedStats.native_math,
+                protected_cards: patch.protectedCardFingerprints.length,
+                before_card_stats: beforeStats
+            };
+        }
+        // Optimistic concurrency: do not overwrite edits made after the first read.
+        const latest = await this.getDocByUrl(url);
+        if ((0, lake_utils_1.canonicalizeLake)(latest.doc.body_html) !==
+            (0, lake_utils_1.canonicalizeLake)(initialLake)) {
+            throw new Error('文档在准备更新期间发生了变化，已中止写入；请重新读取后重试');
+        }
+        await this.updateDocLake(initial.doc.id, patch.updated, latest.doc.draft_version);
+        const verified = await this.getDocByUrl(url);
+        const verifiedLake = verified.doc.body_html;
+        const verifiedLocation = (0, lake_utils_1.locateSection)(verifiedLake, heading, headingLevel);
+        const protectedLake = verifiedLake.slice(0, verifiedLocation.contentStart) +
+            verifiedLake.slice(verifiedLocation.contentEnd);
+        const protectedAfter = (0, lake_utils_1.cardFingerprints)(protectedLake);
+        if (JSON.stringify(protectedAfter) !== JSON.stringify(patch.protectedCardFingerprints)) {
+            throw new Error('写后校验失败：目标章节之外的卡片节点发生变化，请立即检查语雀历史版本');
+        }
+        const sectionLake = verifiedLake.slice(verifiedLocation.contentStart, verifiedLocation.contentEnd);
+        const sectionStats = (0, lake_utils_1.getCardStats)(sectionLake);
+        if (sectionStats.native_math < convertedStats.native_math) {
+            throw new Error(`写后校验失败：应有 ${convertedStats.native_math} 个公式节点，实际为 ${sectionStats.native_math}`);
+        }
+        return {
+            success: true,
+            dry_run: false,
+            doc_id: verified.doc.id,
+            book_id: verified.book.id,
+            heading: verifiedLocation.heading.text,
+            heading_level: verifiedLocation.heading.level,
+            formulas_written: convertedStats.native_math,
+            formulas_verified: sectionStats.native_math,
+            protected_cards_verified: protectedAfter.length,
+            before_card_stats: beforeStats,
+            after_card_stats: (0, lake_utils_1.getCardStats)(verifiedLake),
+            updated_at: verified.doc.updated_at,
+            url
+        };
     }
     parseYuqueUrl(url) {
         try {
             const urlObj = new URL(url);
             const hostname = urlObj.hostname;
+            if (urlObj.protocol !== 'https:') {
+                return null;
+            }
+            const allowedHosts = new Set(['www.yuque.com']);
+            if (ORG_BASE_URL) {
+                const orgUrl = new URL(ORG_BASE_URL);
+                if (orgUrl.protocol !== 'https:' || !orgUrl.hostname.endsWith('.yuque.com')) {
+                    return null;
+                }
+                allowedHosts.add(orgUrl.hostname);
+            }
+            if (!allowedHosts.has(hostname)) {
+                return null;
+            }
             // 路径格式: /{group_or_user}/{book_slug}/{doc_slug}
             const pathParts = urlObj.pathname.split('/').filter(p => p);
             if (pathParts.length < 3) {
@@ -889,11 +957,18 @@ class YuqueClient {
                     format: doc.format,
                     public: doc.public,
                     status: doc.status,
+                    draft_version: doc.draft_version || 0,
+                    content_updated_at: doc.content_updated_at,
                     word_count: doc.word_count,
                     created_at: doc.created_at,
                     updated_at: doc.updated_at,
                     body: plainText,
-                    body_html: lakeContent
+                    body_html: lakeContent,
+                    card_stats: (0, lake_utils_1.getCardStats)(lakeContent),
+                    headings: (0, lake_utils_1.listHeadings)(lakeContent).map(heading => ({
+                        level: heading.level,
+                        text: heading.text
+                    }))
                 },
                 book: {
                     id: bookInfo.id,

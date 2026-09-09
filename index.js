@@ -172,7 +172,7 @@ const tools = [
     },
     {
         name: 'update_doc',
-        description: '更新已有文档的内容或标题',
+        description: '更新文档标题，或显式确认后整篇覆盖正文。含公式/卡片的文档优先使用 patch_doc_section_by_url',
         inputSchema: {
             type: 'object',
             properties: {
@@ -190,7 +190,11 @@ const tools = [
                 },
                 body: {
                     type: 'string',
-                    description: '新内容（可选）'
+                    description: '整篇新内容（可选，高风险）'
+                },
+                confirm_full_replace: {
+                    type: 'boolean',
+                    description: '正文整篇覆盖时必须为 true；仅更新标题时不需要'
                 }
             },
             required: ['book_id', 'doc_id']
@@ -438,34 +442,81 @@ const tools = [
     },
     // ========== URL 直接访问 ==========
     {
-        name: 'get_doc_by_url',
-        description: '通过语雀文档链接直接获取文档内容（支持个人空间和公司空间）',
+        name: 'patch_doc_section_by_url',
+        description: '按标题替换语雀 Lake 文档中的一个章节。正文使用 Markdown，块公式用 $$...$$，会转为原生 math 节点；章节外公式、图片和其他卡片原样保留，并执行写前并发检查和写后校验',
         inputSchema: {
             type: 'object',
             properties: {
                 url: {
                     type: 'string',
-                    description: '语雀文档链接，如 https://www.yuque.com/user/book/doc 或 https://bd-tech.yuque.com/group/book/doc'
+                    description: '语雀个人空间文档链接'
+                },
+                heading: {
+                    type: 'string',
+                    description: '要替换正文的现有标题文本，不要包含 #'
+                },
+                heading_level: {
+                    type: 'number',
+                    minimum: 1,
+                    maximum: 6,
+                    description: '标题层级（可选；同名标题出现多次时必须指定）'
+                },
+                body_markdown: {
+                    type: 'string',
+                    description: '该标题下的新正文，不含目标标题本身。子标题层级必须更低；块公式使用 $$...$$'
+                },
+                dry_run: {
+                    type: 'boolean',
+                    description: '为 true 时仅转换和校验，不写入语雀'
+                }
+            },
+            required: ['url', 'heading', 'body_markdown']
+        }
+    },
+    {
+        name: 'get_doc_by_url',
+        description: '通过语雀文档链接获取公式感知的 Markdown 内容、标题结构和卡片统计。原生 math 节点会还原为 $$...$$',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                url: {
+                    type: 'string',
+                    description: '语雀个人空间文档链接，如 https://www.yuque.com/user/book/doc'
                 }
             },
             required: ['url']
         }
     }
 ];
+// Personal-space hardened profile. Destructive and organization-specific tools
+// stay unavailable unless this local installation is explicitly reviewed again.
+const disabledToolNames = new Set([
+    'delete_doc',
+    'delete_repo',
+    'list_org_repos',
+    'list_org_docs',
+    'get_org_doc',
+    'create_org_doc',
+    'update_org_doc',
+]);
 const server = new index_js_1.Server({
     name: 'yuque-mcp',
-    version: '1.0.0',
+    version: '1.2.0',
 }, {
     capabilities: {
         tools: {},
     },
+    instructions: '读取语雀文档时保留公式语义。修改含公式或卡片的 Lake 文档时，优先使用 patch_doc_section_by_url；块公式必须写成 $$...$$。先 dry_run，再正式写入。不要用 update_doc 整篇覆盖此类文档，除非用户明确要求并设置 confirm_full_replace=true。',
 });
 server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
-    return { tools };
+    return { tools: tools.filter(tool => !disabledToolNames.has(tool.name)) };
 });
 server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
+        if (disabledToolNames.has(name)) {
+            throw new Error(`Tool disabled by local security policy: ${name}`);
+        }
         let result;
         switch (name) {
             case 'check_auth_status': {
@@ -578,7 +629,10 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                 break;
             }
             case 'update_doc': {
-                const { book_id, doc_id, title, body } = args;
+                const { book_id, doc_id, title, body, confirm_full_replace } = args;
+                if (body !== undefined && confirm_full_replace !== true) {
+                    throw new Error('整篇覆盖正文需要 confirm_full_replace=true；含公式/卡片的文档请改用 patch_doc_section_by_url');
+                }
                 result = await getClient().updateDoc(book_id, doc_id, { title, body });
                 break;
             }
@@ -669,6 +723,11 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                 break;
             }
             // ========== URL 直接访问 ==========
+            case 'patch_doc_section_by_url': {
+                const { url, heading, heading_level, body_markdown, dry_run } = args;
+                result = await getClient().patchDocSectionByUrl(url, heading, body_markdown, heading_level, dry_run === true);
+                break;
+            }
             case 'get_doc_by_url': {
                 const { url } = args;
                 const data = await getClient().getDocByUrl(url);
@@ -681,6 +740,8 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                     word_count: data.doc.word_count,
                     updated_at: data.doc.updated_at,
                     body: data.doc.body,
+                    headings: data.doc.headings,
+                    card_stats: data.doc.card_stats,
                     url: data.url
                 };
                 break;

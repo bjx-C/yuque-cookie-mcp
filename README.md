@@ -14,6 +14,7 @@
 | `get_note` | 小记管理 | 获取单篇小记完整内容 |
 | `create_note` | 小记管理 | 创建小记（lake 格式） |
 | `update_note` | 小记管理 | 更新小记内容 |
+| `patch_doc_section_by_url` | 文档编辑 | 按标题局部替换章节，保留其他 Lake 卡片并支持原生公式节点 |
 
 > 小记功能通过语雀网页内部 API (`/api/modules/note/notes/NoteController`) 实现，官方 OpenAPI 不覆盖小记，仅 Cookie 模式下可用。
 
@@ -46,8 +47,26 @@
 | `get_doc` | 获取文档内容 |
 | `create_doc` | 创建文档 |
 | `update_doc` | 更新文档 |
+| `patch_doc_section_by_url` | **通过链接和标题安全更新单个章节**（支持语雀原生公式节点） |
 | `delete_doc` | 删除文档 |
 | `search_docs` | 搜索文档 |
+
+### 公式与章节级更新
+
+更新 Lake 文档时，优先使用 `patch_doc_section_by_url`。工具会先通过语雀官方转换接口把 Markdown 转成 Lake，再只替换指定标题下的内容，并在写入前后校验目标章节之外的卡片节点。
+
+语雀公式使用标准 LaTeX Markdown 语法：
+
+```markdown
+行内公式：$C = \frac{m}{V}$
+
+块级公式：
+$$
+C = \frac{m}{V}
+$$
+```
+
+建议先令 `dry_run=true` 查看标题层级、公式数量和受保护卡片数量，再执行正式写入。`update_doc` 的正文更新是整篇替换，必须显式传入 `confirm_full_replace=true`。
 
 ### 小记管理（新增）
 

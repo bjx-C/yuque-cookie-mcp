@@ -1,7 +1,7 @@
 {
   "name": "yuque-cookie-mcp",
-  "version": "1.1.0",
-  "description": "语雀 MCP 服务器 - Cookie 认证，无需超级会员。支持个人/公司空间、知识库创建、小记管理、链接读取",
+  "version": "1.2.0",
+  "description": "语雀 MCP 服务器 - Cookie 认证，无需超级会员。支持原生公式节点、章节级安全更新、个人/公司空间和小记管理",
   "main": "index.js",
   "bin": {
     "yuque-cookie-mcp": "./index.js"
@@ -9,6 +9,7 @@
   "files": [
     "index.js",
     "yuque-client.js",
+    "lake-utils.js",
     "login.js",
     "README.md"
   ],
@@ -18,7 +19,8 @@
   },
   "scripts": {
     "start": "node index.js",
-    "login": "node login.js"
+    "login": "node login.js",
+    "test": "node --test"
   },
   "keywords": [
     "yuque",
