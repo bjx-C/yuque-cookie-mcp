@@ -90,7 +90,7 @@ $$
 ## 安装
 
 ```bash
-npm install -g github:dove-yang/yuque-cookie-mcp
+npm install -g github:bjx-C/yuque-cookie-mcp
 ```
 
 ## 首次登录
@@ -177,7 +177,7 @@ Cookie 过期后，在对话中说"刷新语雀 Cookie"即可重新登录。
 
 ```bash
 # 克隆仓库
-git clone https://github.com/dove-yang/yuque-cookie-mcp.git
+git clone https://github.com/bjx-C/yuque-cookie-mcp.git
 cd yuque-cookie-mcp
 
 # 手动登录获取 Cookie
